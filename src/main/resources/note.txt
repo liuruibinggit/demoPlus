@@ -1,0 +1,85 @@
+1、Tomcat怎么知道解析 webapps 目录和 WEB-INF/web.xml 文件的？
+    tomcat 容器的 server.xml 文件配置信息
+    <!-- server.xml -->
+    <!-- appBase 属性指定应用程序所在目录 -->
+    <Host name="localhost"  appBase="webapps"  unpackWARs="true" autoDeploy="true">
+    <!-- context.xml -->
+    <Context>
+        <!-- Default set of monitored resources. If one of these changes, the web application will be reloaded. -->
+        <WatchedResource>WEB-INF/web.xml</WatchedResource>
+        <WatchedResource>WEB-INF/tomcat-web.xml</WatchedResource>
+        <WatchedResource>${catalina.base}/conf/web.xml</WatchedResource>
+    </Context>
+
+2、servlet3.0之前
+    public class HelloWorldServlet extends HttpServlet
+    public class HelloWorldFilter implements Filter
+    在 web.xml 中配置 Servlet 和 Filter
+          <servlet>
+            <servlet-name>HelloWorldServlet</servlet-name>
+            <servlet-class>cn.edu.shopping.servlet.HelloWorldServlet</servlet-class>
+          </servlet>
+          <servlet-mapping>
+            <servlet-name>HelloWorldServlet</servlet-name>
+            <url-pattern>/hello</url-pattern>
+          </servlet-mapping>
+          <filter>
+            <filter-name>HelloWorldFilter</filter-name>
+            <filter-class>cn.edu.shopping.filter.HelloWorldFilter</filter-class>
+          </filter>
+          <filter-mapping>
+            <filter-name>HelloWorldFilter</filter-name>
+            <url-pattern>/hello</url-pattern>
+          </filter-mapping>
+3、servlet3.0之后
+   Servlet3.0 首先提供了 @WebServlet、@WebFilter 和 @WebListener 等注解，可以替代 web.xml 文件中的 Servlet 和 Filter 等配置项
+   ServletContext 对象的功能在新版本中也得到了增强。现在，该对象支持在运行时动态部署 Servlet、过滤器、监听器，以及为 Servlet 和过滤器增加 URL 映射等
+
+   ServletRegistration.Dynamic addServlet(String servletName,Class<? extends Servlet> servletClass)
+   ServletRegistration.Dynamic addServlet(String servletName, Servlet servlet)
+   ServletRegistration.Dynamic addServlet(String servletName, String className)
+   T createServlet(Class clazz)
+   ServletRegistration getServletRegistration(String servletName)
+   Map<string,? extends servletregistration> getServletRegistrations()
+
+   通过 createServlet() 方法创建的 Servlet，通常需要做一些自定义的配置，然后使用 addServlet() 方法来将其动态注册为一个可以用于服务的Servlet。
+   两个 getServletRegistration() 方法主要用于动态为 Servlet 增加映射信息，这等价于在 web.xml( 抑或 web-fragment.xml) 中使用
+   标签为存在的 Servlet 增加映射信息
+    ServletContext 新增的方法要么是在 ServletContextListener 的 contexInitialized 方法中调用，要么是在 ServletContainerInitializer 的 onStartup() 方法中调用。
+
+   ServletContainerInitializer 也是 Servlet 3.0 新增的一个接口，容器在启动时使用 JAR 服务 API(JAR Service API) 来发现 ServletContainerInitializer 的实现类，并且容器将 WEB-INF/lib 目录下 JAR 包中的类都交给该类的 onStartup() 方法处理，我们通常需要在该实现类上使用 @HandlesTypes 注解来指定希望被处理的类，过滤掉不希望给 onStartup() 处理的类
+
+
+HelloWorldFilter 和 HelloWorldServlet 没有变动，新增了一个 CustomServletContainerInitializer 对象，它实现了 javax.servlet.ServletContainerInitializer 接口，用来在 Web 容器启动时加载需要的 Servlet 和 Filter
+
+   public class CustomServletContainerInitializer implements ServletContainerInitializer {
+
+       @Override
+       public void onStartup(Set<Class<?>> c, ServletContext ctx) throws ServletException {
+           System.out.println("创建 Hello World Servlet...");
+           javax.servlet.ServletRegistration.Dynamic servlet = ctx.addServlet(
+               HelloWorldServlet.class.getSimpleName(), HelloWorldServlet.class);
+           servlet.addMapping("/hello");
+
+           System.out.println("创建 Hello World Filter...");
+           javax.servlet.FilterRegistration.Dynamic filter = ctx.addFilter(HelloWorldFilter.class.getSimpleName(), HelloWorldFilter.class);
+           EnumSet<DispatcherType> dispatcherTypes = EnumSet.allOf(DispatcherType.class);
+           dispatcherTypes.add(DispatcherType.REQUEST);
+           dispatcherTypes.add(DispatcherType.FORWARD);
+           filter.addMappingForUrlPatterns(dispatcherTypes, true, "/hello");
+       }
+   }
+
+这么声明一个 ServletContainerInitializer 的实现类，Web 容器并不会识别它，需要借助 SPI 机制来指定该初始化类，通过在项目 ClassPath 路径下创建 META-INF/services/javax.servlet.ServletContainerInitializer 文件来做到的，内容如下：
+cn.edu.shopping.CustomServletContainerInitializer
+这样一来，使用 ServletContainerInitializer 和 SPI 机制则可以拜托 web.xml 了。
+
+4、Spring 是如何支持 Servlet3.0?
+    在 Spring 的 spring-web 子工程的 ClassPath 下面的有一个 META-INF/services/javax.servlet.ServletContainerInitializer 文件，如下：
+    org.springframework.web.SpringServletContainerInitializer
+
+    Spring 与我们上述提供的 Demo 不同，并没有在 SpringServletContainerInitializer 中直接对 Servlet 和 Filter 进行注册，而是委托给了一个陌生的类 WebApplicationInitializer ，这个类便是 Spring 用来初始化 Web 环境的委托者类
+
+    WebApplicationInitializer
+
+    AbstractDispatcherServletInitializer  (无web.xml)-->    DispatcherServlet
